@@ -123,6 +123,42 @@ class TimelineTests(unittest.TestCase):
             self.assertEqual(self.run_cli(timeline, output).returncode, 2)
             self.assertEqual(output.read_bytes(), original)
 
+    def test_cli_reports_unicode_output_paths_on_legacy_consoles(self):
+        for encoding in ("cp1252", "ascii", "utf-8"):
+            with self.subTest(encoding=encoding), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "\u65e5\u672c"
+                root.mkdir()
+                timeline, output = root / "sequence.json", root / "command"
+                timeline.write_text(json.dumps(self.document), encoding="utf-8")
+                env = {**os.environ, "PYTHONIOENCODING": encoding, "PYTHONUTF8": "0"}
+                result = subprocess.run(
+                    [sys.executable, "-X", "utf8=0", str(Path(pad_timeline.__file__)), str(timeline), str(output)],
+                    env=env, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+                self.assertEqual(result.stdout.decode("utf-8").strip(), f"Queued 2 timed events in {output}")
+                self.assertEqual(result.stderr, b"")
+                lines = output.read_text(encoding="utf-8").splitlines()
+                self.assertTrue(lines[0].startswith("APS5_PAD_TIMELINE 1 "))
+                self.assertEqual(lines[0].split()[-1], "2")
+                self.assertEqual(lines[1:], ["200 100 18432", "500 200 64"])
+
+    def test_cli_reports_unicode_error_paths_on_legacy_consoles(self):
+        for encoding in ("cp1252", "ascii", "utf-8"):
+            with self.subTest(encoding=encoding), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                timeline, output = root / "\u65e5\u672c.json", root / "command"
+                output.write_bytes(b"previous command\n")
+                env = {**os.environ, "PYTHONIOENCODING": encoding, "PYTHONUTF8": "0"}
+                result = subprocess.run(
+                    [sys.executable, "-X", "utf8=0", str(Path(pad_timeline.__file__)), str(timeline), str(output)],
+                    env=env, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, b"")
+                error = result.stderr.decode("utf-8")
+                self.assertIn(str(timeline), error)
+                self.assertNotIn("Traceback", error)
+                self.assertEqual(output.read_bytes(), b"previous command\n")
+
     def test_input_alias_protection(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
